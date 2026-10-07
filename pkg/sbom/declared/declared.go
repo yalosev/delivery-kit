@@ -54,6 +54,10 @@ func ParseSpec(ecosystem config.PackagesDirectiveType, spec []byte) ([]Package, 
 		return parseRequirementsTxt(spec)
 	case config.PackagesDirectiveTypeLuaRock:
 		return parseRockspec(spec)
+	case config.PackagesDirectiveTypeRubyBundler:
+		return parseGemfile(spec)
+	case config.PackagesDirectiveTypeRubyGemspec:
+		return parseGemspec(spec)
 	default:
 		return nil, fmt.Errorf("packages type %q has no spec file to declare packages from", ecosystem)
 	}
@@ -201,6 +205,8 @@ var purlTypes = map[config.PackagesDirectiveType]string{
 	config.PackagesDirectiveTypePythonUV:       packageurl.TypePyPi,
 	config.PackagesDirectiveTypePythonPip:      packageurl.TypePyPi,
 	config.PackagesDirectiveTypeLuaRock:        "luarocks",
+	config.PackagesDirectiveTypeRubyBundler:    packageurl.TypeGem,
+	config.PackagesDirectiveTypeRubyGemspec:    packageurl.TypeGem,
 	config.PackagesDirectiveTypeOSPM:           packageurl.TypeGeneric,
 }
 

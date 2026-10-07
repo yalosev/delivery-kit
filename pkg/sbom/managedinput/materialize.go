@@ -92,13 +92,17 @@ type materializer struct {
 }
 
 func (m *materializer) materialize(ctx context.Context, imageEnv []string) error {
-	for _, sourcePath := range m.cataloger.SourcePaths {
+	var specData []byte
+	for i, sourcePath := range m.cataloger.SourcePaths {
 		data, err := m.reader.ReadFile(ctx, sourcePath)
 		if err != nil {
 			return m.readErr(sourcePath, err)
 		}
 		if err := writeMaterializedFile(m.scanDir, sourcePath, data); err != nil {
 			return err
+		}
+		if i == 0 {
+			specData = data
 		}
 	}
 
@@ -120,13 +124,13 @@ func (m *materializer) materialize(ctx context.Context, imageEnv []string) error
 		}
 	}
 
-	return m.enrich(ctx, imageEnv, lockData)
+	return m.enrich(ctx, imageEnv, specData, lockData)
 }
 
 // enrich copies the cataloger's enrichment source into the scan dir. The cataloger picks
 // which files to read from it; only the manifests/license files are copied, not the
 // installed code.
-func (m *materializer) enrich(ctx context.Context, imageEnv []string, lockData []byte) error {
+func (m *materializer) enrich(ctx context.Context, imageEnv []string, specData, lockData []byte) error {
 	enrichment := m.cataloger.Enrichment
 	if enrichment == nil {
 		return nil
@@ -135,14 +139,23 @@ func (m *materializer) enrich(ctx context.Context, imageEnv []string, lockData [
 
 	switch enrichment.Kind {
 	case scanner.EnrichmentKindDir:
-		found, err := m.copyEnrichmentDir(ctx, enrichment.Root, enrichment.FileNamePatterns)
-		if err != nil {
+		return m.copyEnrichmentDirWarnIfMissing(ctx, enrichment)
+
+	case scanner.EnrichmentKindGemHome:
+		// The lock, when the directive has one, names the whole bundle; a gemspec names
+		// only the gem and its direct runtime dependencies. No lock in the image means
+		// nothing to tell the bundle apart from the rest of the gem directory.
+		names := GemspecNames(specData)
+		if enrichment.LockPath != "" {
+			if lockData == nil {
+				return nil
+			}
+			names = GemLockNames(lockData)
+		}
+		if err := m.copyEnrichmentDirWarnIfMissing(ctx, enrichment); err != nil {
 			return err
 		}
-		if !found {
-			logboek.Context(ctx).Warn().LogF("WARNING: %s not found in image %q for cataloger %q; component metadata such as licenses may be missing from the SBOM\n", enrichment.Root, m.imageRef, m.cataloger.Name)
-		}
-		return nil
+		return PruneGemspecs(filepath.Join(m.scanDir, filepath.Clean("/"+enrichment.Root)), names)
 
 	case scanner.EnrichmentKindGoModCache:
 		// No go.sum in the image means no modules to look up.
@@ -175,6 +188,17 @@ func (m *materializer) enrich(ctx context.Context, imageEnv []string, lockData [
 	default:
 		panic("unsupported enrichment kind " + string(enrichment.Kind))
 	}
+}
+
+func (m *materializer) copyEnrichmentDirWarnIfMissing(ctx context.Context, enrichment *scanner.Enrichment) error {
+	found, err := m.copyEnrichmentDir(ctx, enrichment.Root, enrichment.FileNamePatterns)
+	if err != nil {
+		return err
+	}
+	if !found {
+		logboek.Context(ctx).Warn().LogF("WARNING: %s not found in image %q for cataloger %q; component metadata such as licenses may be missing from the SBOM\n", enrichment.Root, m.imageRef, m.cataloger.Name)
+	}
+	return nil
 }
 
 func (m *materializer) copyEnrichmentDir(ctx context.Context, dirPath string, patterns []string) (bool, error) {
